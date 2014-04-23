@@ -1,0 +1,155 @@
+#!/bin/bash
+# Convert any number of videos to a burnable DVD ISO
+
+# Sources:
+# https://wiki.archlinux.org/index.php/Convert_any_Movie_to_DVD_Video
+# http://kevinlocke.name/bits/2012/08/25/letterboxing-with-ffmpeg-avconv-for-mobile/
+
+# This script only works for the NTSC format
+
+# DvdAuthor 7 and up needs this
+export VIDEO_FORMAT=NTSC
+
+# Check we have enough command line arguments
+if [ $# -lt 1 ]
+then
+    echo "Usage: $0 <input file 1 ... input file n>"
+    exit
+fi
+
+# Check for dependencies
+missing=0
+dependencies=( "mencoder" "avconv" "avprobe" "dvdauthor" "mkisofs" )
+for command in ${dependencies[@]}
+do
+    if ! which $command &>/dev/null
+    then
+        echo "$command not found"
+        missing=1
+    fi
+done
+
+if [ $missing = 1 ]
+then
+    echo "Please install the missing applications and try again"
+    exit
+fi
+
+function emphasise() {
+    echo ""
+    echo "********** $1 **********"
+    echo ""
+}
+
+# Check the files exists
+for var in "$@"
+do
+    if [ ! -e "$var" ]
+    then
+        echo "File $var not found"
+        exit
+    fi
+done
+
+emphasise "Calculating aspect ratio and scaling factors"
+
+# Gets the maximum frame size of the videos
+width=0
+height=0
+for var in "$@"
+do
+    ret=(`avprobe "$var" 2>&1 | sed -n "s/^.\+Video:.\+,.\+, \([0-9]\+\)x\([0-9]\+\).*$/\1 \2/p"`)
+
+    # Find the optimal crop box based on the first 60 seconds of video
+    #crop=`avconv -i "$var" -y -an -t 60 -f "rawvideo" -vf cropdetect=24:1 /dev/null 2>&1 | sed -n "s/^.\+ \(crop=[0-9]\+:[0-9]\+:[0-9]\+:[0-9]\).*$/\1/p" | uniq | tail -1`
+
+    if [ ${ret[0]} -gt $width ];then
+        width=${ret[0]}
+    fi
+    if [ ${ret[1]} -gt $height ];then
+        height=${ret[1]}
+    fi
+done
+
+# Calculate likely aspect ratio of the output
+# (divide with full precision, exploit integer division by setting scale=0 to get a rounded result)
+# Since 4:3 = 1.3333 and 16/9 = 1.7777, if the rounded value is > 1, ratio is 16:9, otherwise 4:3
+if [ `echo "r=$width/$height;scale=0;(r+0.5)/1" | bc -l` -gt 1 ];then
+    ratio=16:9
+else
+    ratio=4:3
+fi
+
+# Find the dimension to scale the videos to so they fit the aspect ratio.
+ret=(`echo "r=${ratio//://}; scale=0; if($width > $height * r){ $width; $width/r;} else{ $height*r; $height;};" | bc -l`)
+width=${ret[0]}
+height=${ret[1]}
+
+emphasise "Converting AVI to MPG"
+
+for var in "$@"
+do
+    # DVD specs from https://github.com/FFmpeg/FFmpeg/blob/e079661d23ff3891cf663a85344d1f8eb60a4fe1/ffmpeg_opt.c#L2181
+    # The -vf line scales the videos up/down to fit in the frame and adds black bars on the top/side, then scales to fit the NTSC resolution (720x480)
+    # Use -vol/-dialnorm for volume manipulation (watch out for distortion though)
+    avconv -i "$var" -y \
+        -aspect $ratio \
+        -vf "scale=iw*sar*min($width/(iw*sar)\,$height/ih):ih*min($width/(iw*sar)\,$height/ih),pad=$width:$height:(ow-iw)/2:(oh-ih)/2,scale=720:480" \
+        -f "dvd" -c:v "mpeg2video" -r "29.97" \
+        -pix_fmt "yuv420p" -b:v 6000000 -bufsize 1835008 -minrate 0 -maxrate 9000000 -g 18 \
+        -c:a "ac3" -b:a 448000 -ar 48000 -vol 2048 \
+        "$var.mpg"
+    if [ $? != 0 ]
+    then
+        emphasise "Conversion failed"
+        exit
+    fi
+done
+
+emphasise "Creating XML file"
+
+echo "<dvdauthor>
+<vmgm />
+<titleset>
+<titles>
+<pgc>" > dvd.xml
+
+for var in "$@"
+do
+    echo "<vob file=\"$var.mpg\" />" >> dvd.xml
+done
+
+echo "</pgc>
+</titles>
+</titleset>
+</dvdauthor>" >> dvd.xml
+
+emphasise "Creating DVD contents"
+
+dvdauthor -o dvd -x dvd.xml
+
+if [ $? != 0 ]
+then
+    emphasise "DVD Creation failed"
+    exit
+fi
+
+emphasise "Creating ISO image"
+
+mkisofs -dvd-video -o dvd.iso dvd/
+
+if [ $? != 0 ]
+then
+    emphasise "ISO Creation failed"
+    exit
+fi
+
+# Everything passed. Cleanup
+for var in "$@"
+do
+    rm -f "$var.mpg"
+done
+rm -rf dvd/
+rm -f dvd.xml
+
+emphasise "Success: dvd.iso image created"
