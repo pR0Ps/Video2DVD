@@ -97,7 +97,7 @@ do
         -vf "scale=iw*sar*min($width/(iw*sar)\,$height/ih):ih*min($width/(iw*sar)\,$height/ih),pad=$width:$height:(ow-iw)/2:(oh-ih)/2,scale=720:480" \
         -f "dvd" -c:v "mpeg2video" -r "29.97" \
         -pix_fmt "yuv420p" -b:v 6000000 -bufsize 1835008 -minrate 0 -maxrate 9000000 -g 18 \
-        -c:a "ac3" -b:a 448000 -ar 48000 -vol 2048 \
+        -c:a "ac3" -b:a 448000 -ar 48000 -vol 1024 \
         "$var.mpg"
     if [ $? != 0 ]
     then
