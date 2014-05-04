@@ -19,7 +19,7 @@ fi
 
 # Check for dependencies
 missing=0
-dependencies=( "avconv" "avprobe" "dvdauthor" "mkisofs" )
+dependencies=( "avconv" "avprobe" "dvdauthor" "mkisofs" "bc" )
 for command in ${dependencies[@]}
 do
     if ! which $command &>/dev/null
